@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+
+project_id = "pivot-project-501905"
+region     = "europe-west1"
+zone       = "europe-west1-b"
+
+ssh_user       = "pivot-deploy"
+ssh_public_key = "ssh-ed25519 AAAA...your-public-key... pivot-mvp-deploy"
+
+# Your own IP only — check with `curl ifconfig.me`. Never 0.0.0.0/0.
+ssh_source_ranges = ["203.0.113.42/32"]
