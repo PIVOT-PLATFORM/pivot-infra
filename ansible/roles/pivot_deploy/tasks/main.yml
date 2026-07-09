@@ -1,0 +1,175 @@
+---
+- name: Assert Docker is present (provisioned by Terraform's startup-script)
+  ansible.builtin.command: docker --version
+  changed_when: false
+
+- name: Ensure /opt/pivot exists and is traversable by any container UID
+  ansible.builtin.file:
+    path: "{{ pivot_deploy_path }}"
+    state: directory
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    # 0755, not 0750 — every service container needs to traverse this path to reach its own
+    # bind-mounted file below; the files themselves stay individually locked down (0600 + ACL).
+    mode: "0755"
+
+- name: Ensure subdirectories exist
+  ansible.builtin.file:
+    path: "{{ pivot_deploy_path }}/{{ item }}"
+    state: directory
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "0755"
+  loop:
+    - secrets
+    - tls
+    - docker/activemq
+
+- name: Copy docker-compose.prod.yml
+  ansible.builtin.copy:
+    src: "{{ pivot_core_repo_path }}/docker-compose.prod.yml"
+    dest: "{{ pivot_deploy_path }}/docker-compose.prod.yml"
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "0644"
+
+- name: Copy ActiveMQ config (EN07.3)
+  ansible.builtin.copy:
+    src: "{{ pivot_core_repo_path }}/docker/activemq/activemq.xml"
+    dest: "{{ pivot_deploy_path }}/docker/activemq/activemq.xml"
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "0644"
+
+- name: Render deploy-time compose override (backend alias compat shim — see template header)
+  ansible.builtin.template:
+    src: docker-compose.override.yml.j2
+    dest: "{{ pivot_deploy_path }}/docker-compose.override.yml"
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "0644"
+
+# --- Secrets -----------------------------------------------------------------------------
+# Base mode 0600, owner-only — Docker Compose (non-swarm) secrets are plain bind mounts, so
+# the host file's real permissions apply inside the container verbatim. Rather than a blanket
+# world-readable mode, grant read access precisely to the numeric UID each consuming
+# container actually runs as, via POSIX ACLs (see group_vars/mvp_test/vars.yml for how those
+# UIDs were determined). Base bits stay 0600 — a UID with no ACL entry gets nothing.
+
+- name: Write secret files
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ pivot_deploy_path }}/secrets/{{ item.name }}"
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "0600"
+  loop:
+    - { name: postgres_password.txt, content: "{{ vault_postgres_password }}" }
+    - { name: otp_secret.txt, content: "{{ vault_otp_secret }}" }
+    - { name: mail_password.txt, content: "{{ vault_mail_password }}" }
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Ensure the acl package (setfacl) is installed
+  ansible.builtin.apt:
+    name: acl
+    state: present
+    update_cache: true
+  become: true
+
+# postgres itself reads postgres_password.txt via its official entrypoint, which runs as
+# root before dropping privileges — root bypasses standard permission checks entirely, no
+# ACL needed for that consumer. Only pivot-core (uid 100, "pivot") needs an explicit grant.
+- name: Grant secret files read access to pivot-core's UID
+  ansible.posix.acl:
+    path: "{{ pivot_deploy_path }}/secrets/{{ item }}"
+    entity: "{{ uid_pivot_core }}"
+    etype: user
+    permissions: r
+    state: present
+  loop:
+    - postgres_password.txt
+    - mail_password.txt
+    - otp_secret.txt
+
+# --- TLS ---------------------------------------------------------------------------------
+
+- name: Generate self-signed TLS cert (idempotent — only if missing)
+  ansible.builtin.command:
+    cmd: >
+      openssl req -x509 -nodes -newkey rsa:2048
+      -keyout {{ pivot_deploy_path }}/tls/pivot.key
+      -out {{ pivot_deploy_path }}/tls/pivot.crt
+      -days 365
+      -subj "/CN={{ app_external_ip }}"
+      -addext "subjectAltName=IP:{{ app_external_ip }}"
+    creates: "{{ pivot_deploy_path }}/tls/pivot.key"
+
+- name: Lock down TLS key/cert permissions
+  ansible.builtin.file:
+    path: "{{ pivot_deploy_path }}/tls/{{ item.name }}"
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: pivot.key, mode: "0600" }
+    - { name: pivot.crt, mode: "0644" }
+
+# nginx (pivot-ui image) needs to read both — same ACL approach as the secrets above once
+# its own runtime UID is confirmed; deferred until pivot-ui's deploy.yml is wired to this VM.
+
+# --- App config (.env) --------------------------------------------------------------------
+
+- name: Render .env
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ pivot_deploy_path }}/.env"
+    owner: "{{ pivot_deploy_user }}"
+    group: "{{ pivot_deploy_user }}"
+    mode: "0600"
+
+# --- GHCR auth + images --------------------------------------------------------------------
+# Plain `docker` CLI via command/shell rather than community.docker's Python-SDK-backed
+# modules — those need the `docker` Python package installed on the target, which isn't
+# provisioned here; the CLI is already confirmed present (Terraform startup-script).
+
+- name: Docker login to GHCR
+  ansible.builtin.command:
+    cmd: docker login ghcr.io -u {{ vault_ghcr_username }} --password-stdin
+    stdin: "{{ vault_ghcr_pat }}"
+  changed_when: true
+  no_log: true
+
+# KNOWN BUG (release.yml, pivot-core AND pivot-ui) — the image name it builds/pushes is
+# ghcr.io/pivot-platform/<repo>/<repo> (doubled segment), not ghcr.io/pivot-platform/<repo> as
+# docker-compose.prod.yml expects. Confirmed 2026-07-09 via the release run logs. Workaround
+# here (pull the real path, retag to the expected one) until fixed upstream via a proper PR —
+# do not treat this as the permanent shape of the pipeline.
+- name: "Workaround: pull images from the actual (buggy, doubled-segment) GHCR path"
+  ansible.builtin.command:
+    cmd: "docker pull ghcr.io/pivot-platform/{{ item }}/{{ item }}:latest"
+  loop:
+    - pivot-core
+    - pivot-ui
+  changed_when: true
+
+- name: "Workaround: retag to the path docker-compose.prod.yml expects"
+  ansible.builtin.command:
+    cmd: "docker tag ghcr.io/pivot-platform/{{ item }}/{{ item }}:latest ghcr.io/pivot-platform/{{ item }}:latest"
+  loop:
+    - pivot-core
+    - pivot-ui
+  changed_when: true
+
+- name: Pull remaining third-party images
+  ansible.builtin.command:
+    cmd: docker compose -f docker-compose.prod.yml -f docker-compose.override.yml pull postgres redis activemq
+    chdir: "{{ pivot_deploy_path }}"
+  changed_when: true
+
+- name: Start the stack
+  ansible.builtin.command:
+    cmd: docker compose -f docker-compose.prod.yml -f docker-compose.override.yml up -d
+    chdir: "{{ pivot_deploy_path }}"
+  changed_when: true

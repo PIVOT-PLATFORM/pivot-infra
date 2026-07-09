@@ -20,3 +20,8 @@ terraform.rc
 *.key
 id_*
 !*.pub
+
+# Ansible Vault — the password file itself, never the encrypted vault.yml
+# (vault.yml is meant to be committed: it's AES256-encrypted at rest)
+ansible/.vault_pass
+*.retry

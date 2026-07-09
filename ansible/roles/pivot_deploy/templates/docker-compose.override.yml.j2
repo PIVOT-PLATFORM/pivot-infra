@@ -1,0 +1,13 @@
+# Deploy-time compatibility shim for THIS VM only — never committed to pivot-core.
+#
+# ghcr.io/pivot-platform/pivot-ui:latest (as currently published) predates EN17.7, which
+# removed the `backend` network alias on pivot-core in favor of nginx.conf referencing
+# `pivot-core:8080` directly. The published image's baked-in nginx.conf still expects
+# `backend:8080` — until pivot-ui republishes an image built from current main, restore the
+# alias here rather than reverting EN17.7's cleanup in the real docker-compose.prod.yml.
+services:
+  pivot-core:
+    networks:
+      pivot-net-app:
+        aliases:
+          - backend

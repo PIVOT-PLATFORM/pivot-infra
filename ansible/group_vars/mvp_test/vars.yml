@@ -1,0 +1,17 @@
+---
+pivot_deploy_path: /opt/pivot
+pivot_deploy_user: pivot-deploy
+
+pivot_core_repo_path: /Users/leobrignone/Documents/pivot/pivot-core
+
+app_external_ip: "34.156.238.225"
+pivot_app_url: "https://{{ app_external_ip }}"
+cors_allowed_origins: "https://{{ app_external_ip }}"
+
+smtp_port: 587
+pivot_mail_from: "{{ vault_smtp_username }}"
+
+# Numeric UID pivot-core's container actually runs as (docker inspect / `docker run --entrypoint id`,
+# verified 2026-07-09) — used to grant precise ACL read access on secret files instead of a blanket
+# world-readable mode. Re-verify if the base image changes.
+uid_pivot_core: 100  # ghcr.io/pivot-platform/pivot-core (user "pivot")

@@ -1,0 +1,6 @@
+---
+- name: Deploy PIVOT MVP test stack
+  hosts: mvp_test
+  become: false
+  roles:
+    - pivot_deploy
