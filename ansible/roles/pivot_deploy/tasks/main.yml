@@ -141,30 +141,23 @@
   changed_when: true
   no_log: true
 
-# KNOWN BUG (release.yml, pivot-core AND pivot-ui) — the image name it builds/pushes is
-# ghcr.io/pivot-platform/<repo>/<repo> (doubled segment), not ghcr.io/pivot-platform/<repo> as
-# docker-compose.prod.yml expects. Confirmed 2026-07-09 via the release run logs. Workaround
-# here (pull the real path, retag to the expected one) until fixed upstream via a proper PR —
-# do not treat this as the permanent shape of the pipeline.
-- name: "Workaround: pull images from the actual (buggy, doubled-segment) GHCR path"
+# KNOWN BUG, pivot-core only (release.yml pivot-ui#128/pivot-core#198 fixed the code, but
+# pivot-core's own release is currently blocked upstream — Alpine package repo lag on a
+# Trivy-flagged CVE, 2026-07-09, unrelated to this codebase). pivot-ui republished cleanly at
+# the correct path (0.28.0) — no workaround needed for it anymore.
+- name: "Workaround: pull pivot-core from the actual (buggy, doubled-segment) GHCR path"
   ansible.builtin.command:
-    cmd: "docker pull ghcr.io/pivot-platform/{{ item }}/{{ item }}:latest"
-  loop:
-    - pivot-core
-    - pivot-ui
+    cmd: "docker pull ghcr.io/pivot-platform/pivot-core/pivot-core:latest"
   changed_when: true
 
-- name: "Workaround: retag to the path docker-compose.prod.yml expects"
+- name: "Workaround: retag pivot-core to the path docker-compose.prod.yml expects"
   ansible.builtin.command:
-    cmd: "docker tag ghcr.io/pivot-platform/{{ item }}/{{ item }}:latest ghcr.io/pivot-platform/{{ item }}:latest"
-  loop:
-    - pivot-core
-    - pivot-ui
+    cmd: "docker tag ghcr.io/pivot-platform/pivot-core/pivot-core:latest ghcr.io/pivot-platform/pivot-core:latest"
   changed_when: true
 
-- name: Pull remaining third-party images
+- name: Pull nginx (pivot-ui image) and remaining third-party images
   ansible.builtin.command:
-    cmd: docker compose -f docker-compose.prod.yml -f docker-compose.override.yml pull postgres redis activemq
+    cmd: docker compose -f docker-compose.prod.yml -f docker-compose.override.yml pull nginx postgres redis activemq
     chdir: "{{ pivot_deploy_path }}"
   changed_when: true
 

@@ -1,13 +1,16 @@
 # Deploy-time compatibility shim for THIS VM only — never committed to pivot-core.
 #
-# ghcr.io/pivot-platform/pivot-ui:latest (as currently published) predates EN17.7, which
-# removed the `backend` network alias on pivot-core in favor of nginx.conf referencing
-# `pivot-core:8080` directly. The published image's baked-in nginx.conf still expects
-# `backend:8080` — until pivot-ui republishes an image built from current main, restore the
-# alias here rather than reverting EN17.7's cleanup in the real docker-compose.prod.yml.
+# pivot-ui:0.28.0 (released 2026-07-09, EN17.7 included) no longer needs the `backend`
+# network alias workaround an earlier pre-EN17.7 image required here — removed once that
+# version was confirmed published and pulled.
 services:
   pivot-core:
-    networks:
-      pivot-net-app:
-        aliases:
-          - backend
+    environment:
+      # Workaround for a confirmed pivot-core bug (application.yml hardcodes
+      # spring.mail.properties.mail.smtp.auth/starttls.enable to false — fine for dev
+      # Mailpit, never overridden by application-prod.yml). Any real SMTP relay (Gmail,
+      # Brevo, SendGrid...) requires both on port 587 and rejects mail otherwise
+      # (confirmed here: "530 5.7.0 Must issue a STARTTLS command first"). Real fix tracked
+      # upstream — remove this override once that PR merges and this image republishes.
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "true"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "true"
