@@ -61,14 +61,23 @@ pivot-infra/
 
 ### Known gaps hit running this for real (2026-07-09)
 
-- **GHCR image path bug** (`release.yml`, pivot-core *and* pivot-ui): images publish to
-  `ghcr.io/pivot-platform/<repo>/<repo>` (doubled segment) instead of
-  `ghcr.io/pivot-platform/<repo>` as `docker-compose.prod.yml` expects. The playbook pulls
-  from the real path and retags — a workaround, not a fix. Needs a PR upstream.
+- ~~**GHCR image path bug**~~ — fixed upstream (pivot-ui#128/pivot-core#198); both images now
+  publish to `ghcr.io/pivot-platform/<repo>` as `docker-compose.prod.yml` expects. No workaround
+  needed anymore (removed 2026-07-10).
 - **Published `pivot-ui:latest` predates EN17.7** — no `backend` network alias needed by its
   baked-in `nginx.conf`, and no TLS listener at all. `ansible/roles/pivot_deploy/templates/
   docker-compose.override.yml.j2` restores the alias so nginx boots; **HTTPS won't work until
   pivot-ui publishes a newer image** — this stack is HTTP-only on this VM for now.
+
+### Update (2026-07-10) — `latest` tag removed upstream
+
+pivot-core#219/pivot-ui#146 stopped `docker-compose.prod.yml` falling back to `:latest`, and
+pivot-core#218/pivot-ui#148 stopped publishing a `latest` tag at all —
+`PIVOT_CORE_VERSION`/`PIVOT_UI_VERSION` are now hard-required, no default. This repo now pins
+`pivot_core_version` in `group_vars/mvp_test/vars.yml` (previously only `pivot_ui_version` was
+pinned; pivot-core rode the `:latest` fallback while its release was blocked upstream). Bump
+both vars — and re-run the playbook — on every new release you want deployed; there is no
+implicit "latest" anymore for either image.
 
 ## Cost (europe-west1, MVP test defaults)
 
