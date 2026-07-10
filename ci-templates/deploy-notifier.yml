@@ -1,0 +1,83 @@
+# TEMPLATE — replaces each service repo's deploy.yml (the SSH deploy AND the
+# collaboratif TODO stubs). No SSH, no docker login, no PROD_SSH_*. It resolves
+# the released image digest from Artifact Registry (keyless WIF) and hands off
+# to the central orchestrator in pivot-infra, which owns the Cloud Run rollout.
+#
+# Copy into <service-repo>/.github/workflows/deploy.yml. Adjust SERVICE/IMAGE.
+# ALL third-party actions MUST be SHA-pinned before merge (Plumber).
+#
+# Required in the service repo:
+#   vars.WIF_PROVIDER    = <iam_wif provider_name>
+#   vars.DEPLOYER_SA     = dep-<service>@<project>.iam.gserviceaccount.com  (needs AR reader)
+#   vars.IMAGE           = europe-west1-docker.pkg.dev/<project>/pivot/<service>
+#   secrets.ORCHESTRATOR_DISPATCH_TOKEN = fine-grained PAT / GitHub App token
+#                          scoped to PIVOT-PLATFORM/pivot-infra: contents:read +
+#                          "Dispatch" (repository_dispatch) — the only cross-repo
+#                          GitHub credential; nothing GCP is keyed.
+
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to deploy (e.g. 0.29.0)
+        required: true
+
+permissions: read-all
+
+concurrency:
+  group: deploy-notify
+  cancel-in-progress: false
+
+jobs:
+  notify-orchestrator:
+    name: Resolve digest & notify orchestrator
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Kept for the audit trail / deployment history, even though the actual
+    # prod gate is enforced in the orchestrator's promote-prod job.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write  # WIF
+    env:
+      SERVICE: pivot-core   # <-- set per repo
+      VERSION: ${{ github.event.release.tag_name && github.event.release.tag_name || inputs.version }}
+    steps:
+      - name: Authenticate to GCP (keyless / WIF)
+        uses: google-github-actions/auth@v2  # PIN to SHA before merge (Plumber)
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2  # PIN to SHA before merge (Plumber)
+
+      - name: Resolve immutable digest for this version
+        id: digest
+        run: |
+          VER="${VERSION#v}"  # strip leading v if present
+          DIGEST=$(gcloud artifacts docker images describe \
+            "${{ vars.IMAGE }}:${VER}" \
+            --format='value(image_summary.digest)')
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::No digest found for ${{ vars.IMAGE }}:${VER}"; exit 1
+          fi
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch to pivot-infra orchestrator
+        uses: peter-evans/repository-dispatch@v3  # PIN to SHA before merge (Plumber)
+        with:
+          token: ${{ secrets.ORCHESTRATOR_DISPATCH_TOKEN }}
+          repository: PIVOT-PLATFORM/pivot-infra
+          event-type: deploy-service
+          client-payload: |
+            {
+              "service": "${{ env.SERVICE }}",
+              "image":   "${{ vars.IMAGE }}",
+              "digest":  "${{ steps.digest.outputs.digest }}",
+              "version": "${{ env.VERSION }}"
+            }
