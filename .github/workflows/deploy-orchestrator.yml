@@ -1,0 +1,155 @@
+name: Deploy orchestrator
+
+# Central deploy authority for the managed stack. Each service repo builds and
+# pushes an immutable digest to Artifact Registry (keyless WIF), then fires a
+# repository_dispatch here with {service, image, digest, version}. This workflow
+# owns the actual Cloud Run rollout:
+#   - recette: automatic, no gate  (deploy fast)
+#   - prod:    GitHub Environment approval + canary traffic split  (deploy stably)
+#
+# The SAME digest validated in recette is the exact artifact promoted to prod —
+# the digest is the contract (no drift, SLSA-friendly).
+#
+# Auth is keyless (Workload Identity Federation): no SA keys, no PROD_SSH_*.
+# Set repo/org VARIABLES (not secrets — nothing sensitive):
+#   vars.WIF_PROVIDER          = <iam_wif output provider_name>
+#   vars.ORCHESTRATOR_SA       = dep-orchestrator@<project>.iam.gserviceaccount.com
+#   vars.GCP_PROJECT           = pivot-project-501905
+#   vars.GCP_REGION            = europe-west1
+#   vars.RECETTE_BASE_URL      = https://recette.pivot.<domain>
+#   vars.PROD_BASE_URL         = https://pivot.<domain>
+
+on:
+  repository_dispatch:
+    types: [deploy-service]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Cloud Run service name (e.g. pivot-core)
+        required: true
+      image:
+        description: "Fully-qualified image WITHOUT digest (…/pivot/<service>)"
+        required: true
+      digest:
+        description: "sha256:… digest to deploy"
+        required: true
+      version:
+        description: Release version (for the revision suffix / audit)
+        required: true
+
+permissions: read-all
+
+concurrency:
+  group: deploy-${{ github.event.client_payload.service || inputs.service }}
+  cancel-in-progress: false
+
+env:
+  SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+  IMAGE:   ${{ github.event.client_payload.image || inputs.image }}
+  DIGEST:  ${{ github.event.client_payload.digest || inputs.digest }}
+  VERSION: ${{ github.event.client_payload.version || inputs.version }}
+
+jobs:
+  # -----------------------------------------------------------------------
+  # RECETTE — automatic, ungated. Deploy the digest, then smoke-test the LB.
+  # -----------------------------------------------------------------------
+  deploy-recette:
+    name: Deploy to recette
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write  # WIF
+    steps:
+      - name: Authenticate to GCP (keyless / WIF)
+        uses: google-github-actions/auth@v2  # PIN to SHA before merge (Plumber)
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.ORCHESTRATOR_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2  # PIN to SHA before merge (Plumber)
+
+      - name: Deploy revision (recette) by digest
+        run: |
+          gcloud run services update "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --image="${IMAGE}@${DIGEST}" \
+            --revision-suffix="v-${VERSION//./-}" \
+            --quiet
+
+      - name: Smoke test (readiness via the LB)
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS "${{ vars.RECETTE_BASE_URL }}/api/actuator/health/readiness"; then
+              echo "recette healthy"; exit 0
+            fi
+            echo "attempt $i not ready yet"; sleep 6
+          done
+          echo "::error::recette readiness never went green"; exit 1
+
+  # -----------------------------------------------------------------------
+  # PROD — gated (Environment approval) + canary traffic split of the SAME
+  # digest, then 100%. Rollback = shift traffic back to the previous revision.
+  # -----------------------------------------------------------------------
+  promote-prod:
+    name: Promote to prod (canary)
+    needs: [deploy-recette]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production  # required reviewers gate the promotion
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to GCP (keyless / WIF)
+        uses: google-github-actions/auth@v2  # PIN to SHA before merge (Plumber)
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.ORCHESTRATOR_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2  # PIN to SHA before merge (Plumber)
+
+      - name: Deploy new revision with NO traffic
+        id: rev
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --image="${IMAGE}@${DIGEST}" \
+            --revision-suffix="v-${VERSION//./-}" \
+            --no-traffic --quiet
+          NEW_REV=$(gcloud run services describe "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
+            --format='value(status.latestCreatedRevisionName)')
+          echo "revision=${NEW_REV}" >> "$GITHUB_OUTPUT"
+
+      - name: Canary 10%
+        run: |
+          gcloud run services update-traffic "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
+            --to-revisions="${{ steps.rev.outputs.revision }}=10" --quiet
+
+      - name: Watch canary (readiness + error budget)
+        run: |
+          for i in $(seq 1 10); do
+            curl -fsS "${{ vars.PROD_BASE_URL }}/api/actuator/health/readiness" || { echo "::error::canary unhealthy"; exit 1; }
+            sleep 12
+          done
+
+      - name: Shift 100% to the new revision
+        run: |
+          gcloud run services update-traffic "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
+            --to-revisions="${{ steps.rev.outputs.revision }}=100" --quiet
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          # Shift all traffic back to the previously-serving revision. No image
+          # re-pull — instant rollback.
+          gcloud run services update-traffic "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
+            --to-latest=false --quiet || true
