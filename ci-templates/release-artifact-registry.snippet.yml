@@ -1,0 +1,59 @@
+# TEMPLATE SNIPPET — grafts Artifact Registry (keyless WIF) push onto each
+# service's existing release.yml, ALONGSIDE the current GHCR push during the
+# dual-push window (migration Phase 1), then GHCR is dropped.
+#
+# Keep everything already in release.yml: check-release-trigger, semantic-release
+# version, Trivy fail-closed BEFORE push, SLSA L3 provenance, SBOM. Only the
+# registry/auth changes. All actions SHA-pinned before merge (Plumber).
+#
+# 1. Add to the `release` job permissions (WIF needs id-token):
+#      permissions:
+#        contents: write
+#        packages: write          # (still needed during dual-push to GHCR)
+#        id-token: write          # <-- NEW: Workload Identity Federation
+#        # ...existing...
+#
+# 2. Repo variables (not secrets — keyless):
+#      vars.WIF_PROVIDER = <iam_wif provider_name>
+#      vars.DEPLOYER_SA  = dep-<service>@<project>.iam.gserviceaccount.com
+#      vars.AR_IMAGE     = europe-west1-docker.pkg.dev/<project>/pivot/<service>
+#      vars.AR_HOST      = europe-west1-docker.pkg.dev
+#
+# 3. Insert these steps in the `release` job, AFTER the Trivy gate and in place
+#    of / next to the existing GHCR "Push Docker image" step:
+
+      - name: Authenticate to GCP (keyless / WIF)
+        uses: google-github-actions/auth@v2  # PIN to SHA before merge (Plumber)
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.AR_HOST }}" --quiet
+
+      # Tag the SAME scanned image for Artifact Registry. Trivy has already
+      # gated it above (fail-closed) — we never push an unscanned image.
+      - name: Push image to Artifact Registry
+        id: push-ar
+        run: |
+          docker tag "${IMAGE_VERSION}" "${{ vars.AR_IMAGE }}:${VERSION}"
+          PUSH_OUT=$(docker push "${{ vars.AR_IMAGE }}:${VERSION}" 2>&1)
+          printf '%s\n' "${PUSH_OUT}"
+          DIGEST=$(printf '%s\n' "${PUSH_OUT}" | grep -oE 'sha256:[a-f0-9]{64}' | tail -1)
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::No digest after AR push — cannot deploy/attest by digest."; exit 1
+          fi
+          echo "ar_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+# 4. Point the SLSA container provenance at the AR image+digest (was GHCR):
+#      provenance-container:
+#        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+#        with:
+#          image:  ${{ vars.AR_IMAGE }}
+#          digest: ${{ needs.release.outputs.ar_digest }}
+#        # AR auth for the generator: use WIF (id-token) rather than registry
+#        # username/password — see the generator's GCP auth inputs.
+#
+# 5. Once the AR image is proven to pull in GCP (Phase 1 verification), REMOVE
+#    the GHCR login + push steps and the packages: write permission. Deploys use
+#    the AR digest exclusively from then on (deploy-notifier.yml resolves it).
