@@ -141,23 +141,12 @@
   changed_when: true
   no_log: true
 
-# KNOWN BUG, pivot-core only (release.yml pivot-ui#128/pivot-core#198 fixed the code, but
-# pivot-core's own release is currently blocked upstream — Alpine package repo lag on a
-# Trivy-flagged CVE, 2026-07-09, unrelated to this codebase). pivot-ui republished cleanly at
-# the correct path (0.28.0) — no workaround needed for it anymore.
-- name: "Workaround: pull pivot-core from the actual (buggy, doubled-segment) GHCR path"
+# The doubled-segment GHCR path bug (release.yml, pivot-ui#128/pivot-core#198) and pivot-core's
+# Alpine/Trivy release block have both cleared — pivot-core:0.28.0 now publishes at the correct
+# (non-doubled) path, same as pivot-ui, so no manual pull/retag workaround is needed anymore.
+- name: Pull pivot-core, nginx (pivot-ui image), and remaining third-party images
   ansible.builtin.command:
-    cmd: "docker pull ghcr.io/pivot-platform/pivot-core/pivot-core:latest"
-  changed_when: true
-
-- name: "Workaround: retag pivot-core to the path docker-compose.prod.yml expects"
-  ansible.builtin.command:
-    cmd: "docker tag ghcr.io/pivot-platform/pivot-core/pivot-core:latest ghcr.io/pivot-platform/pivot-core:latest"
-  changed_when: true
-
-- name: Pull nginx (pivot-ui image) and remaining third-party images
-  ansible.builtin.command:
-    cmd: docker compose -f docker-compose.prod.yml -f docker-compose.override.yml pull nginx postgres redis activemq
+    cmd: docker compose -f docker-compose.prod.yml -f docker-compose.override.yml pull pivot-core nginx postgres redis activemq
     chdir: "{{ pivot_deploy_path }}"
   changed_when: true
 

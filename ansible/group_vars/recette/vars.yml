@@ -8,11 +8,12 @@ app_external_ip: "34.156.238.225"
 pivot_app_url: "https://{{ app_external_ip }}"
 cors_allowed_origins: "https://{{ app_external_ip }}"
 
-# Pinned per docker-compose.prod.yml's own convention (":latest" is first-bring-up only).
-# pivot-core stays unpinned (falls through to :latest) — its own release is currently blocked
-# upstream (Alpine package repo lag on a Trivy-flagged CVE, 2026-07-09) so no new tag exists
-# yet beyond what's already deployed here.
+# Pinned per docker-compose.prod.yml's own convention. Both required as of pivot-core#219 /
+# pivot-ui#146 (neither repo publishes a `latest` tag, nor does the compose file fall back to
+# it, anymore — see README "Known gaps"). pivot-core's Alpine/Trivy release block (2026-07-09)
+# has since cleared; 0.28.0 is published at the correct (non-doubled) GHCR path.
 pivot_ui_version: "0.28.0"
+pivot_core_version: "0.28.0"
 
 smtp_port: 587
 pivot_mail_from: "{{ vault_smtp_username }}"

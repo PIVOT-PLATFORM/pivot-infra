@@ -22,7 +22,7 @@ variable "machine_type" {
 }
 
 variable "ssh_user" {
-  description = "SSH user — must match PROD_SSH_USER in pivot-core's GitHub Actions secrets (EN07.5)."
+  description = "SSH user — must match RECETTE_SSH_USER in pivot-core/pivot-ui/pivot-collaboratif-core's GitHub Actions secrets (recette environment, EN07.5)."
   type        = string
 }
 

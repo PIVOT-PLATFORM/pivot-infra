@@ -1,6 +1,9 @@
 ---
-- name: Deploy PIVOT MVP test stack
-  hosts: mvp_test
+- name: Deploy PIVOT stack
+  # `target_env` selects which inventory group / group_vars to use — required, no default, so
+  # a bare `ansible-playbook playbook.yml` fails loudly instead of silently guessing an
+  # environment. Invoke as: `ansible-playbook playbook.yml -e target_env=recette` (or `prod`).
+  hosts: "{{ target_env | mandatory }}"
   become: false
   roles:
     - pivot_deploy
