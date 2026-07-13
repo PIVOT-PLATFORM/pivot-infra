@@ -206,7 +206,7 @@ module "run_core" {
   env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE     = "prod"
     MANAGEMENT_SERVER_PORT     = "8080"
-    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
     SPRING_DATASOURCE_USERNAME = "pivot"
     SPRING_MAIL_HOST           = var.smtp_host
     SPRING_MAIL_PORT           = tostring(var.smtp_port)
@@ -253,7 +253,7 @@ module "run_collaboratif" {
   env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE       = "prod"
     MANAGEMENT_SERVER_PORT       = "8083"
-    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
     SPRING_DATASOURCE_USERNAME   = "pivot"
     SPRING_FLYWAY_SCHEMAS        = "collaboratif"
     PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
@@ -294,7 +294,7 @@ module "run_agilite" {
   env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE       = "prod"
     MANAGEMENT_SERVER_PORT       = "8082"
-    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
     SPRING_DATASOURCE_USERNAME   = "pivot"
     SPRING_FLYWAY_SCHEMAS        = "agilite"
     PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
@@ -334,7 +334,7 @@ module "run_pilotage" {
   env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE       = "prod"
     MANAGEMENT_SERVER_PORT       = "8081"
-    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
     SPRING_DATASOURCE_USERNAME   = "pivot"
     SPRING_FLYWAY_SCHEMAS        = "pilotage"
     PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
