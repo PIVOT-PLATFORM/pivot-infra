@@ -23,7 +23,7 @@ resource "google_cloud_run_v2_service" "this" {
   project             = var.project_id
   name                = var.name
   location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  ingress             = var.ingress
   deletion_protection = var.deletion_protection
 
   template {
@@ -40,12 +40,16 @@ resource "google_cloud_run_v2_service" "this" {
     # Direct VPC egress (no always-on Serverless VPC connector to pay for).
     # Cloud Run instances get an IP from the subnet and reach Cloud SQL/Redis/
     # ActiveMQ private IPs directly. PRIVATE_RANGES_ONLY keeps public egress
-    # (SMTP, OIDC) on the normal path.
-    vpc_access {
-      egress = "PRIVATE_RANGES_ONLY"
-      network_interfaces {
-        network    = var.network_id
-        subnetwork = var.subnetwork_id
+    # (SMTP, OIDC) on the normal path. Omitted when network_id is null (the
+    # public edge only calls other run.app URLs — no private egress needed).
+    dynamic "vpc_access" {
+      for_each = var.network_id == null ? [] : [1]
+      content {
+        egress = "PRIVATE_RANGES_ONLY"
+        network_interfaces {
+          network    = var.network_id
+          subnetwork = var.subnetwork_id
+        }
       }
     }
 

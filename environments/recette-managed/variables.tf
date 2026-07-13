@@ -10,6 +10,12 @@ variable "region" {
   description = "Region for all managed resources."
 }
 
+variable "project_number" {
+  type        = string
+  default     = "25190701001"
+  description = "GCP project number — used to build the edge's deterministic Cloud Run URL (https://<service>-<project_number>.<region>.run.app) without a dependency cycle."
+}
+
 variable "github_owner" {
   type        = string
   default     = "PIVOT-PLATFORM"
@@ -41,35 +47,22 @@ variable "pivot_collaboratif_image" {
   description = "pivot-collaboratif-core image, ideally by @sha256 digest."
 }
 
-# --- Edge / hostnames --------------------------------------------------------
-variable "recette_host" {
+variable "pivot_agilite_image" {
   type        = string
-  default     = "recette.pivot.example"
-  description = "Public hostname for the recette-managed stack (managed cert domain + A record). Set to the real domain."
+  default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-agilite-core:PLACEHOLDER"
+  description = "pivot-agilite-core image, ideally by @sha256 digest."
 }
 
-variable "spa_bucket_name" {
+variable "pivot_pilotage_image" {
   type        = string
-  default     = "pivot-recette-spa-501905"
-  description = "Globally-unique GCS bucket name for the Angular SPA."
+  default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-pilotage-core:PLACEHOLDER"
+  description = "pivot-pilotage-core image, ideally by @sha256 digest."
 }
 
-variable "manage_dns_zone" {
-  type        = bool
-  default     = false
-  description = "Create the Cloud DNS zone here (true) or reuse an existing one (false)."
-}
-
-variable "dns_zone_name" {
+variable "pivot_ui_image" {
   type        = string
-  default     = "pivot-zone"
-  description = "Cloud DNS managed zone resource name."
-}
-
-variable "dns_zone_dns_name" {
-  type        = string
-  default     = "pivot.example."
-  description = "Zone DNS name with trailing dot (required when manage_dns_zone=true)."
+  default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-ui:PLACEHOLDER"
+  description = "pivot-ui edge (nginx + SPA) image, ideally by @sha256 digest."
 }
 
 # --- SMTP (public egress; not secret except the password) --------------------

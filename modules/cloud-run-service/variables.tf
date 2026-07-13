@@ -16,14 +16,27 @@ variable "service_account_email" {
   description = "Runtime SA email (least privilege, per service)."
 }
 
+variable "ingress" {
+  type        = string
+  default     = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  description = <<-EOT
+    Ingress setting. Default keeps the LB-fronted posture (raw run.app URL
+    unreachable). For the no-LB managed-min stack, set INGRESS_TRAFFIC_ALL so the
+    public *.run.app URL serves directly (edge nginx + backends reached over
+    run.app; access controlled by invoker IAM + the app's opaque-token auth).
+  EOT
+}
+
 variable "network_id" {
   type        = string
-  description = "VPC id for Direct VPC egress (network module output network_id)."
+  default     = null
+  description = "VPC id for Direct VPC egress (network module output network_id). null = no VPC egress (e.g. the public edge that only reaches other run.app URLs)."
 }
 
 variable "subnetwork_id" {
   type        = string
-  description = "Subnet id for Direct VPC egress (network module output subnet_id)."
+  default     = null
+  description = "Subnet id for Direct VPC egress (network module output subnet_id). null = no VPC egress."
 }
 
 variable "container_port" {
