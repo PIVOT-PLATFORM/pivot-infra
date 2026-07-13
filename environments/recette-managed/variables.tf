@@ -95,3 +95,22 @@ variable "mail_from" {
   default     = ""
   description = "PIVOT_MAIL_FROM address."
 }
+
+# --- FinOps: Cloud SQL stop/start schedule -----------------------------------
+variable "sql_schedule_tz" {
+  type        = string
+  default     = "Europe/Paris"
+  description = "Time zone for the Cloud SQL stop/start scheduler jobs."
+}
+
+variable "sql_stop_cron" {
+  type        = string
+  default     = "0 22 * * *"
+  description = "Cron to STOP Cloud SQL (unix cron, in sql_schedule_tz). Default 22:00 daily."
+}
+
+variable "sql_start_cron" {
+  type        = string
+  default     = "0 7 * * *"
+  description = "Cron to START Cloud SQL. Default 07:00 daily."
+}
