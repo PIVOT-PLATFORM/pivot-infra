@@ -31,10 +31,11 @@ provider "google" {
 #     *.run.app URLs (ingress = ALL). The pivot-ui edge (nginx) is the single
 #     public entry point and reverse-proxies /api/* to the backend run.app URLs.
 #   - No HTTPS Load Balancer (~$18/mo saved), no SPA bucket/CDN, no Cloud DNS.
-#   - No ActiveMQ VM, no Memorystore: backends run Redis-less (in-memory module
-#     cache + readiness without redis) and collaboratif uses its in-memory
-#     SimpleBroker (the additive ActiveMQ relay stays disabled).
-#   - Cloud SQL db-f1-micro (ZONAL) is the only always-on cost (stoppable).
+#   - No Memorystore, no ActiveMQ broker: collaboratif uses its in-memory
+#     SimpleBroker (the additive ActiveMQ relay stays disabled). Redis IS needed
+#     (rate limiting + whiteboard presence) so ONE tiny e2-micro VM hosts Redis
+#     only (run_activemq=false) — far cheaper than Memorystore.
+#   - Always-on cost = Cloud SQL db-f1-micro (stoppable) + the e2-micro Redis VM.
 #
 # Security: backends are public but protected by the app's opaque-token auth
 # (duplicated per service). Tighten later to ingress=internal + IAM if wanted.
@@ -112,7 +113,7 @@ module "secrets" {
   project_id = var.project_id
   region     = var.region
 
-  # No redis-auth: the stack is Redis-less.
+  # No redis-auth secret: the self-hosted Redis VM is VPC-internal, no AUTH.
   secrets = {
     "postgres-password" = { accessors = [for k in ["pivot-core", "pivot-collaboratif", "pivot-agilite", "pivot-pilotage"] : "serviceAccount:${google_service_account.runtime[k].email}"] }
     "mail-password"     = { accessors = ["serviceAccount:${google_service_account.runtime["pivot-core"].email}"] }
@@ -139,10 +140,32 @@ module "cloud_sql" {
   deletion_protection = false
 }
 
+# Redis is REQUIRED (not just a cache): pivot-core rate limiting + collaboratif
+# whiteboard presence/membership hard-depend on StringRedisTemplate. Cheapest
+# option that actually works = one tiny always-on VM hosting only Redis (no
+# Memorystore ~$35/mo, no LB). ActiveMQ is NOT run (run_activemq=false) — the
+# in-memory SimpleBroker covers the whiteboard, so this VM is Redis-only.
+# assign_public_ip=true lets it pull the redis image at boot (no Cloud NAT);
+# inbound stays firewall-locked (private IP, VPC-internal only).
+module "redis_vm" {
+  source = "../../modules/activemq-vm"
+
+  project_id       = var.project_id
+  zone             = var.zone
+  name             = "pivot-recette-redis"
+  subnet_id        = module.network.subnet_id
+  machine_type     = "e2-micro"
+  run_activemq     = false
+  run_redis        = true
+  assign_public_ip = true
+
+  labels = local.labels
+}
+
 # --- Application tier (Cloud Run) --------------------------------------------
-# All backends: public run.app URL (ingress=ALL), scale-to-zero, Redis-less.
-#   MANAGEMENT_SERVER_PORT = serving port so Cloud Run probes reach actuator.
-#   readiness group drops "redis"; Redis autoconfig excluded (in-memory cache).
+# All backends: public run.app URL (ingress=ALL), scale-to-zero. Redis reached
+# over Direct VPC egress (private IP). MANAGEMENT_SERVER_PORT = serving port so
+# Cloud Run probes reach actuator.
 locals {
   # Public URL of the edge (pivot-ui), used by backends for PIVOT_APP_URL (email
   # links) and CORS. Computed from Cloud Run's deterministic URL scheme
@@ -152,10 +175,11 @@ locals {
   # random-hash URL, correct PIVOT_APP_URL/CORS with one `gcloud run update`.
   edge_host = "pivot-ui-${var.project_number}.${var.region}.run.app"
 
-  # Shared readiness/Redis-less wiring applied to every backend.
-  redisless_env = {
-    MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE = "readinessState,db,flyway"
-    SPRING_AUTOCONFIGURE_EXCLUDE                       = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration"
+  # Redis wiring shared by every backend (self-hosted VM, VPC-internal, no TLS).
+  redis_env = {
+    SPRING_DATA_REDIS_HOST        = module.redis_vm.redis_host
+    SPRING_DATA_REDIS_PORT        = tostring(module.redis_vm.redis_port)
+    SPRING_DATA_REDIS_SSL_ENABLED = "false"
   }
 }
 
@@ -179,7 +203,7 @@ module "run_core" {
   max_instances       = 2
   invokers            = ["allUsers"] # reached by the edge over the public URL
 
-  env = merge(local.redisless_env, {
+  env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE     = "prod"
     MANAGEMENT_SERVER_PORT     = "8080"
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
@@ -198,7 +222,7 @@ module "run_core" {
     { name = "PIVOT_AUTH_OTP_SECRET", secret = "otp-secret" },
   ]
 
-  depends_on = [module.secrets, module.cloud_sql]
+  depends_on = [module.secrets, module.cloud_sql, module.redis_vm]
 }
 
 module "run_collaboratif" {
@@ -226,7 +250,7 @@ module "run_collaboratif" {
   session_affinity = true
   invokers         = ["allUsers"]
 
-  env = merge(local.redisless_env, {
+  env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE     = "prod"
     MANAGEMENT_SERVER_PORT     = "8083"
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
@@ -241,7 +265,7 @@ module "run_collaboratif" {
     { name = "SPRING_DATASOURCE_PASSWORD", secret = "postgres-password" },
   ]
 
-  depends_on = [module.secrets, module.cloud_sql, module.run_core]
+  depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
 }
 
 module "run_agilite" {
@@ -266,7 +290,7 @@ module "run_agilite" {
   session_affinity    = true
   invokers            = ["allUsers"]
 
-  env = merge(local.redisless_env, {
+  env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE     = "prod"
     MANAGEMENT_SERVER_PORT     = "8082"
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
@@ -280,7 +304,7 @@ module "run_agilite" {
     { name = "SPRING_DATASOURCE_PASSWORD", secret = "postgres-password" },
   ]
 
-  depends_on = [module.secrets, module.cloud_sql, module.run_core]
+  depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
 }
 
 module "run_pilotage" {
@@ -305,7 +329,7 @@ module "run_pilotage" {
   session_affinity    = true
   invokers            = ["allUsers"]
 
-  env = merge(local.redisless_env, {
+  env = merge(local.redis_env, {
     SPRING_PROFILES_ACTIVE     = "prod"
     MANAGEMENT_SERVER_PORT     = "8081"
     SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
@@ -319,7 +343,7 @@ module "run_pilotage" {
     { name = "SPRING_DATASOURCE_PASSWORD", secret = "postgres-password" },
   ]
 
-  depends_on = [module.secrets, module.cloud_sql, module.run_core]
+  depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
 }
 
 # --- Edge: pivot-ui nginx (SPA + reverse proxy) — the ONLY public entry point -

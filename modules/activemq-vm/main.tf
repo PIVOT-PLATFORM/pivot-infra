@@ -20,6 +20,7 @@ terraform {
 # compose stack's boot-disk volumes). This is the "data persistence" property
 # for the broker's message store.
 resource "google_compute_disk" "kahadb" {
+  count   = var.run_activemq ? 1 : 0
   project = var.project_id
   name    = "${var.name}-kahadb"
   zone    = var.zone
@@ -67,9 +68,12 @@ resource "google_compute_instance" "this" {
     }
   }
 
-  attached_disk {
-    source      = google_compute_disk.kahadb.id
-    device_name = "kahadb"
+  dynamic "attached_disk" {
+    for_each = var.run_activemq ? [1] : []
+    content {
+      source      = google_compute_disk.kahadb[0].id
+      device_name = "kahadb"
+    }
   }
 
   # Private IP by default (no access_config). In dev (assign_public_ip=true) an
@@ -96,6 +100,7 @@ resource "google_compute_instance" "this" {
   metadata = {
     block-project-ssh-keys = "true"
     startup-script = templatefile("${path.module}/startup-script.sh", {
+      run_activemq   = var.run_activemq
       activemq_image = var.activemq_image
       stomp_port     = var.stomp_port
       run_redis      = var.run_redis
