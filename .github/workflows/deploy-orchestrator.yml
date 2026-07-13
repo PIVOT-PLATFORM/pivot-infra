@@ -1,23 +1,21 @@
 name: Deploy orchestrator
 
-# Central deploy authority for the managed stack. Each service repo builds and
-# pushes an immutable digest to Artifact Registry (keyless WIF), then fires a
-# repository_dispatch here with {service, image, digest, version}. This workflow
-# owns the actual Cloud Run rollout:
-#   - recette: automatic, no gate  (deploy fast)
-#   - prod:    GitHub Environment approval + canary traffic split  (deploy stably)
+# Central deploy authority for the managed-min Cloud Run stack (single env, no LB).
+# Each service repo builds + pushes an immutable digest to Artifact Registry
+# (keyless WIF) then fires a repository_dispatch here with {service, image,
+# digest, version}. This workflow owns the Cloud Run rollout: it updates the
+# EXISTING service (created/configured by Terraform in environments/recette-managed
+# — env, secrets, VPC, probes, scaling) to the released digest, then smoke-tests
+# through the public edge. First-ever creation of each service is done by
+# `terraform apply` (with the AR image); this only swaps the image afterwards.
 #
-# The SAME digest validated in recette is the exact artifact promoted to prod —
-# the digest is the contract (no drift, SLSA-friendly).
-#
-# Auth is keyless (Workload Identity Federation): no SA keys, no PROD_SSH_*.
-# Set repo/org VARIABLES (not secrets — nothing sensitive):
-#   vars.WIF_PROVIDER          = <iam_wif output provider_name>
-#   vars.ORCHESTRATOR_SA       = dep-orchestrator@<project>.iam.gserviceaccount.com
-#   vars.GCP_PROJECT           = pivot-project-501905
-#   vars.GCP_REGION            = europe-west1
-#   vars.RECETTE_BASE_URL      = https://recette.pivot.<domain>
-#   vars.PROD_BASE_URL         = https://pivot.<domain>
+# Auth is keyless (Workload Identity Federation): no SA keys.
+# Repo/org VARIABLES (not secrets):
+#   vars.WIF_PROVIDER    = <iam_wif provider_name>
+#   vars.ORCHESTRATOR_SA = dep-orchestrator@pivot-project-501905.iam.gserviceaccount.com
+#   vars.GCP_PROJECT     = pivot-project-501905
+#   vars.GCP_REGION      = europe-west1
+#   vars.RECETTE_BASE_URL = https://<edge pivot-ui *.run.app URL>   (set after first apply)
 
 on:
   repository_dispatch:
@@ -51,10 +49,12 @@ env:
 
 jobs:
   # -----------------------------------------------------------------------
-  # RECETTE — automatic, ungated. Deploy the digest, then smoke-test the LB.
+  # Deploy the released digest to the (Terraform-created) Cloud Run service,
+  # then smoke-test readiness through the public edge. Single env — no prod
+  # gate/canary (managed-min is one environment served on *.run.app).
   # -----------------------------------------------------------------------
-  deploy-recette:
-    name: Deploy to recette
+  deploy:
+    name: Deploy ${{ github.event.client_payload.service || inputs.service }} to Cloud Run
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -62,15 +62,15 @@ jobs:
       id-token: write  # WIF
     steps:
       - name: Authenticate to GCP (keyless / WIF)
-        uses: google-github-actions/auth@v2  # PIN to SHA before merge (Plumber)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.ORCHESTRATOR_SA }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2  # PIN to SHA before merge (Plumber)
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Deploy revision (recette) by digest
+      - name: Deploy revision by digest
         run: |
           gcloud run services update "${SERVICE}" \
             --project="${{ vars.GCP_PROJECT }}" \
@@ -79,77 +79,13 @@ jobs:
             --revision-suffix="v-${VERSION//./-}" \
             --quiet
 
-      - name: Smoke test (readiness via the LB)
+      - name: Smoke test (readiness via the edge)
+        if: vars.RECETTE_BASE_URL != ''
         run: |
           for i in $(seq 1 10); do
             if curl -fsS "${{ vars.RECETTE_BASE_URL }}/api/actuator/health/readiness"; then
-              echo "recette healthy"; exit 0
+              echo "edge healthy"; exit 0
             fi
             echo "attempt $i not ready yet"; sleep 6
           done
-          echo "::error::recette readiness never went green"; exit 1
-
-  # -----------------------------------------------------------------------
-  # PROD — gated (Environment approval) + canary traffic split of the SAME
-  # digest, then 100%. Rollback = shift traffic back to the previous revision.
-  # -----------------------------------------------------------------------
-  promote-prod:
-    name: Promote to prod (canary)
-    needs: [deploy-recette]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: production  # required reviewers gate the promotion
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Authenticate to GCP (keyless / WIF)
-        uses: google-github-actions/auth@v2  # PIN to SHA before merge (Plumber)
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.ORCHESTRATOR_SA }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2  # PIN to SHA before merge (Plumber)
-
-      - name: Deploy new revision with NO traffic
-        id: rev
-        run: |
-          gcloud run deploy "${SERVICE}" \
-            --project="${{ vars.GCP_PROJECT }}" \
-            --region="${{ vars.GCP_REGION }}" \
-            --image="${IMAGE}@${DIGEST}" \
-            --revision-suffix="v-${VERSION//./-}" \
-            --no-traffic --quiet
-          NEW_REV=$(gcloud run services describe "${SERVICE}" \
-            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
-            --format='value(status.latestCreatedRevisionName)')
-          echo "revision=${NEW_REV}" >> "$GITHUB_OUTPUT"
-
-      - name: Canary 10%
-        run: |
-          gcloud run services update-traffic "${SERVICE}" \
-            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
-            --to-revisions="${{ steps.rev.outputs.revision }}=10" --quiet
-
-      - name: Watch canary (readiness + error budget)
-        run: |
-          for i in $(seq 1 10); do
-            curl -fsS "${{ vars.PROD_BASE_URL }}/api/actuator/health/readiness" || { echo "::error::canary unhealthy"; exit 1; }
-            sleep 12
-          done
-
-      - name: Shift 100% to the new revision
-        run: |
-          gcloud run services update-traffic "${SERVICE}" \
-            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
-            --to-revisions="${{ steps.rev.outputs.revision }}=100" --quiet
-
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          # Shift all traffic back to the previously-serving revision. No image
-          # re-pull — instant rollback.
-          gcloud run services update-traffic "${SERVICE}" \
-            --project="${{ vars.GCP_PROJECT }}" --region="${{ vars.GCP_REGION }}" \
-            --to-latest=false --quiet || true
+          echo "::error::readiness never went green"; exit 1
