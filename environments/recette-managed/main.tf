@@ -379,6 +379,66 @@ module "run_edge" {
   }
 }
 
+# --- FinOps: scheduled Cloud SQL stop/start (recette is idle off-hours) -------
+# Cloud SQL has no serverless auto-pause, so a Cloud Scheduler job flips the
+# instance activation policy on a cron. WHILE STOPPED THE DB IS UNREACHABLE and
+# the whole stack is effectively down (every backend needs it) — off-hours only.
+# Adjust the two schedules / time_zone to taste. Cloud Run scales to zero on its
+# own, so the DB is the only always-on compute worth pausing.
+resource "google_service_account" "sql_scheduler" {
+  project      = var.project_id
+  account_id   = "sql-scheduler"
+  display_name = "Cloud SQL stop/start scheduler"
+}
+
+resource "google_project_iam_member" "sql_scheduler_editor" {
+  project = var.project_id
+  role    = "roles/cloudsql.editor"
+  member  = "serviceAccount:${google_service_account.sql_scheduler.email}"
+}
+
+locals {
+  sql_patch_uri = "https://sqladmin.googleapis.com/v1/projects/${var.project_id}/instances/${module.cloud_sql.instance_name}"
+}
+
+resource "google_cloud_scheduler_job" "sql_stop" {
+  project     = var.project_id
+  region      = var.region
+  name        = "pivot-recette-pg-stop"
+  description = "Stop Cloud SQL (activationPolicy=NEVER) — FinOps off-hours"
+  schedule    = var.sql_stop_cron
+  time_zone   = var.sql_schedule_tz
+
+  http_target {
+    http_method = "PATCH"
+    uri         = local.sql_patch_uri
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ settings = { activationPolicy = "NEVER" } }))
+    oauth_token {
+      service_account_email = google_service_account.sql_scheduler.email
+    }
+  }
+}
+
+resource "google_cloud_scheduler_job" "sql_start" {
+  project     = var.project_id
+  region      = var.region
+  name        = "pivot-recette-pg-start"
+  description = "Start Cloud SQL (activationPolicy=ALWAYS) — FinOps business hours"
+  schedule    = var.sql_start_cron
+  time_zone   = var.sql_schedule_tz
+
+  http_target {
+    http_method = "PATCH"
+    uri         = local.sql_patch_uri
+    headers     = { "Content-Type" = "application/json" }
+    body        = base64encode(jsonencode({ settings = { activationPolicy = "ALWAYS" } }))
+    oauth_token {
+      service_account_email = google_service_account.sql_scheduler.email
+    }
+  }
+}
+
 locals {
   labels = {
     env     = "managed-min"
