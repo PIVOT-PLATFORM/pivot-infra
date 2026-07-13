@@ -13,7 +13,13 @@ variable "region" {
 variable "project_number" {
   type        = string
   default     = "25190701001"
-  description = "GCP project number — used to build the edge's deterministic Cloud Run URL (https://<service>-<project_number>.<region>.run.app) without a dependency cycle."
+  description = "GCP project number — used to build the edge's deterministic Cloud Run URL when edge_host is unset."
+}
+
+variable "edge_host" {
+  type        = string
+  default     = ""
+  description = "Real edge (pivot-ui) run.app hostname (no scheme), used for backends' PIVOT_APP_URL/CORS. Empty = fall back to the deterministic pattern (pre-first-apply). Set to the actual URL once known (this project uses legacy hash URLs, not deterministic)."
 }
 
 variable "github_owner" {
