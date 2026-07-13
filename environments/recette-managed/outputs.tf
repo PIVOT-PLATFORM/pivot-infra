@@ -1,4 +1,4 @@
-# Values CI and later phases consume.
+# Values CI and operators consume.
 
 output "wif_provider_name" {
   value       = module.iam_wif.provider_name
@@ -22,12 +22,7 @@ output "registry_host" {
 
 output "network_name" {
   value       = module.network.network_name
-  description = "VPC name (Cloud Run uses Direct VPC egress into its subnet — no connector)."
-}
-
-output "dev_redis_host" {
-  value       = module.activemq.redis_host
-  description = "Co-located dev Redis private IP (BUILD cost posture; prod uses Memorystore)."
+  description = "VPC name (backend Cloud Run uses Direct VPC egress into its subnet — no connector)."
 }
 
 output "runtime_sa_emails" {
@@ -45,17 +40,20 @@ output "cloud_sql_connection_name" {
   description = "Cloud SQL connection name (gcloud sql connect / DMS cutover)."
 }
 
-output "lb_ip_address" {
-  value       = module.lb.ip_address
-  description = "LB anycast IP — point the recette DNS A record here (already wired via the dns module)."
+# --- Service URLs ------------------------------------------------------------
+
+output "edge_url" {
+  value       = module.run_edge.uri
+  description = "PUBLIC entry point — open this in a browser. The pivot-ui edge (SPA + /api reverse proxy)."
 }
 
-output "spa_bucket" {
-  value       = module.lb.spa_bucket
-  description = "SPA bucket — pivot-ui CI uploads dist/ here."
-}
-
-output "dns_name_servers" {
-  value       = module.dns.name_servers
-  description = "Delegate the domain to these NS (only when manage_dns_zone=true)."
+output "service_urls" {
+  value = {
+    "pivot-ui"                = module.run_edge.uri
+    "pivot-core"              = module.run_core.uri
+    "pivot-collaboratif-core" = module.run_collaboratif.uri
+    "pivot-agilite-core"      = module.run_agilite.uri
+    "pivot-pilotage-core"     = module.run_pilotage.uri
+  }
+  description = "All Cloud Run service URLs. Backends are reached by the edge; set vars.RECETTE_BASE_URL (orchestrator) to edge_url."
 }

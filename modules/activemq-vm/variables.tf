@@ -31,6 +31,12 @@ variable "data_disk_size_gb" {
   description = "Persistent KahaDB disk size (GB)."
 }
 
+variable "run_activemq" {
+  type        = bool
+  default     = true
+  description = "Run the ActiveMQ broker (+ its KahaDB persistent disk). Set false for a Redis-only VM (managed-min uses the in-memory SimpleBroker, so no ActiveMQ is needed — this VM then just hosts Redis)."
+}
+
 variable "activemq_image" {
   type        = string
   default     = "apache/activemq-classic:6.2.0"

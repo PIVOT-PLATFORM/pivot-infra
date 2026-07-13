@@ -4,17 +4,20 @@
 set -euo pipefail
 
 # --- 1. Mount the dedicated KahaDB persistent disk at /opt/activemq/data ------
-DEVICE=/dev/disk/by-id/google-kahadb
+# Only when the ActiveMQ broker runs (managed-min is Redis-only: no disk).
 MOUNT=/opt/activemq/data
-mkdir -p "$MOUNT"
+if [ "${run_activemq}" = "true" ]; then
+  DEVICE=/dev/disk/by-id/google-kahadb
+  mkdir -p "$MOUNT"
 
-# Format only if the disk has no filesystem yet (first boot). Never reformat an
-# existing store — that would wipe the message store on a VM recreation.
-if ! blkid "$DEVICE" >/dev/null 2>&1; then
-  mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DEVICE"
+  # Format only if the disk has no filesystem yet (first boot). Never reformat an
+  # existing store — that would wipe the message store on a VM recreation.
+  if ! blkid "$DEVICE" >/dev/null 2>&1; then
+    mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DEVICE"
+  fi
+  grep -q "$MOUNT" /etc/fstab || echo "$DEVICE $MOUNT ext4 discard,defaults,nofail 0 2" >>/etc/fstab
+  mountpoint -q "$MOUNT" || mount "$MOUNT"
 fi
-grep -q "$MOUNT" /etc/fstab || echo "$DEVICE $MOUNT ext4 discard,defaults,nofail 0 2" >>/etc/fstab
-mountpoint -q "$MOUNT" || mount "$MOUNT"
 
 # --- 2. Install Docker Engine -------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
@@ -35,11 +38,13 @@ fi
 # DLQ policy) from pivot-core, and set a non-default console password. The
 # default image already exposes the STOMP connector on ${stomp_port}; the broker
 # is only reachable from the VPC (private IP, firewall), never public.
-docker rm -f activemq 2>/dev/null || true
-docker run -d --name activemq --restart unless-stopped \
-  -p ${stomp_port}:${stomp_port} \
-  -v "$MOUNT":/opt/apache-activemq/data \
-  ${activemq_image}
+if [ "${run_activemq}" = "true" ]; then
+  docker rm -f activemq 2>/dev/null || true
+  docker run -d --name activemq --restart unless-stopped \
+    -p ${stomp_port}:${stomp_port} \
+    -v "$MOUNT":/opt/apache-activemq/data \
+    ${activemq_image}
+fi
 
 # --- 4. Optional co-located Redis (dev cost saver) ----------------------------
 # In BUILD/recette we self-host Redis here instead of paying for Memorystore
