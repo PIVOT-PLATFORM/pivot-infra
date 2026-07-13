@@ -138,6 +138,14 @@ resource "google_cloud_run_v2_service" "this" {
       }
     }
   }
+
+  # Terraform creates the service with an initial image; from then on the image
+  # is owned by the deploy pipeline (deploy-dev / orchestrator, `gcloud run
+  # services update` by digest). Ignore it so a later `terraform apply` doesn't
+  # revert the running revision to the (now stale) tfvars image.
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 # Who may invoke the service. For the LB-fronted services this is the LB /

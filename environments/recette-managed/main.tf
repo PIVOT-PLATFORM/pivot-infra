@@ -173,7 +173,7 @@ locals {
   # cycle with run_edge (which itself needs the backend URLs). Verify post-apply
   # with `gcloud run services describe pivot-ui`; if the project uses the legacy
   # random-hash URL, correct PIVOT_APP_URL/CORS with one `gcloud run update`.
-  edge_host = "pivot-ui-${var.project_number}.${var.region}.run.app"
+  edge_host = var.edge_host != "" ? var.edge_host : "pivot-ui-${var.project_number}.${var.region}.run.app"
 
   # Redis wiring shared by every backend (self-hosted VM, VPC-internal, no TLS).
   redis_env = {
