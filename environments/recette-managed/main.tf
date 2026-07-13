@@ -251,11 +251,12 @@ module "run_collaboratif" {
   invokers         = ["allUsers"]
 
   env = merge(local.redis_env, {
-    SPRING_PROFILES_ACTIVE     = "prod"
-    MANAGEMENT_SERVER_PORT     = "8083"
-    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
-    SPRING_DATASOURCE_USERNAME = "pivot"
-    SPRING_FLYWAY_SCHEMAS      = "collaboratif"
+    SPRING_PROFILES_ACTIVE       = "prod"
+    MANAGEMENT_SERVER_PORT       = "8083"
+    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_USERNAME   = "pivot"
+    SPRING_FLYWAY_SCHEMAS        = "collaboratif"
+    PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
     # ActiveMQ relay stays OFF (in-memory broker only) — no PIVOT_ACTIVEMQ_RELAY_*.
     PIVOT_APP_URL        = "https://${local.edge_host}"
     CORS_ALLOWED_ORIGINS = "https://${local.edge_host}"
@@ -291,13 +292,14 @@ module "run_agilite" {
   invokers            = ["allUsers"]
 
   env = merge(local.redis_env, {
-    SPRING_PROFILES_ACTIVE     = "prod"
-    MANAGEMENT_SERVER_PORT     = "8082"
-    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
-    SPRING_DATASOURCE_USERNAME = "pivot"
-    SPRING_FLYWAY_SCHEMAS      = "agilite"
-    PIVOT_APP_URL              = "https://${local.edge_host}"
-    CORS_ALLOWED_ORIGINS       = "https://${local.edge_host}"
+    SPRING_PROFILES_ACTIVE       = "prod"
+    MANAGEMENT_SERVER_PORT       = "8082"
+    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_USERNAME   = "pivot"
+    SPRING_FLYWAY_SCHEMAS        = "agilite"
+    PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
+    PIVOT_APP_URL                = "https://${local.edge_host}"
+    CORS_ALLOWED_ORIGINS         = "https://${local.edge_host}"
   })
 
   secret_env = [
@@ -330,13 +332,14 @@ module "run_pilotage" {
   invokers            = ["allUsers"]
 
   env = merge(local.redis_env, {
-    SPRING_PROFILES_ACTIVE     = "prod"
-    MANAGEMENT_SERVER_PORT     = "8081"
-    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
-    SPRING_DATASOURCE_USERNAME = "pivot"
-    SPRING_FLYWAY_SCHEMAS      = "pilotage"
-    PIVOT_APP_URL              = "https://${local.edge_host}"
-    CORS_ALLOWED_ORIGINS       = "https://${local.edge_host}"
+    SPRING_PROFILES_ACTIVE       = "prod"
+    MANAGEMENT_SERVER_PORT       = "8081"
+    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot"
+    SPRING_DATASOURCE_USERNAME   = "pivot"
+    SPRING_FLYWAY_SCHEMAS        = "pilotage"
+    PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
+    PIVOT_APP_URL                = "https://${local.edge_host}"
+    CORS_ALLOWED_ORIGINS         = "https://${local.edge_host}"
   })
 
   secret_env = [
