@@ -72,11 +72,19 @@ jobs:
 
       - name: Deploy revision by digest
         run: |
+          # Cloud Run revision names are "<service>-<suffix>" and must fit the
+          # Kubernetes 63-char RFC1123 label limit. VERSION can be a full 40-char
+          # git SHA (dev- prefix) or a semver tag, so the suffix must be clamped
+          # to whatever budget is left after the service name, not used verbatim.
+          SUFFIX="v-${VERSION//./-}"
+          MAX_SUFFIX_LEN=$(( 63 - ${#SERVICE} - 1 ))
+          SUFFIX="${SUFFIX:0:MAX_SUFFIX_LEN}"
+          SUFFIX="${SUFFIX%-}"
           gcloud run services update "${SERVICE}" \
             --project="${{ vars.GCP_PROJECT }}" \
             --region="${{ vars.GCP_REGION }}" \
             --image="${IMAGE}@${DIGEST}" \
-            --revision-suffix="v-${VERSION//./-}" \
+            --revision-suffix="${SUFFIX}" \
             --quiet
 
       - name: Smoke test (readiness via the edge)
