@@ -53,7 +53,6 @@ output "service_urls" {
     "pivot-core"              = module.run_core.uri
     "pivot-collaboratif-core" = module.run_collaboratif.uri
     "pivot-agilite-core"      = module.run_agilite.uri
-    "pivot-pilotage-core"     = module.run_pilotage.uri
   }
   description = "All Cloud Run service URLs. Backends are reached by the edge; set vars.RECETTE_BASE_URL (orchestrator) to edge_url."
 }

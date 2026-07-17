@@ -9,7 +9,7 @@ terraform {
 
 # --- Reusable Cloud Run service ---------------------------------------------
 # One instance of this module per backend service (pivot-core,
-# pivot-collaboratif-core, later pilotage/agilite). Deployed by IMAGE DIGEST
+# pivot-collaboratif-core, pivot-agilite-core). Deployed by IMAGE DIGEST
 # (immutable) — the digest validated in recette is the exact artifact promoted
 # to prod.
 #

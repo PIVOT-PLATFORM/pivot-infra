@@ -12,8 +12,8 @@ terraform {
 # public IP), automated backups + point-in-time recovery — this is the core
 # "data persistence" hardening goal: data no longer dies with the VM.
 #
-# Keeps the SINGLE `pivot` database with its 4 schemas (public/pilotage/
-# agilite/collaboratif). Schema ownership is driven by each service's Flyway at
+# Keeps the SINGLE `pivot` database with its 3 schemas (public/agilite/
+# collaboratif). Schema ownership is driven by each service's Flyway at
 # startup, unchanged — so no schema is declared here beyond the database itself.
 #
 # pgbouncer is retired: size max_connections vs (max Cloud Run instances ×
