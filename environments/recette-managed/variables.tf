@@ -59,12 +59,6 @@ variable "pivot_agilite_image" {
   description = "pivot-agilite-core image, ideally by @sha256 digest."
 }
 
-variable "pivot_pilotage_image" {
-  type        = string
-  default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-pilotage-core:PLACEHOLDER"
-  description = "pivot-pilotage-core image, ideally by @sha256 digest."
-}
-
 variable "pivot_ui_image" {
   type        = string
   default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-ui:PLACEHOLDER"

@@ -45,7 +45,7 @@ provider "google" {
 # Least privilege. All are granted Artifact Registry reader (image pull) by the
 # artifact-registry module below; the data-tier accessors are scoped per secret.
 resource "google_service_account" "runtime" {
-  for_each = toset(["pivot-core", "pivot-collaboratif", "pivot-agilite", "pivot-pilotage", "pivot-ui"])
+  for_each = toset(["pivot-core", "pivot-collaboratif", "pivot-agilite", "pivot-ui"])
 
   project      = var.project_id
   account_id   = "sa-${each.value}"
@@ -90,7 +90,6 @@ module "iam_wif" {
     "pivot-ui"                = { account_id = "dep-pivot-ui", project_roles = ["roles/artifactregistry.writer"] }
     "pivot-collaboratif-core" = { account_id = "dep-pivot-collab-core", project_roles = ["roles/artifactregistry.writer"] }
     "pivot-agilite-core"      = { account_id = "dep-pivot-agilite-core", project_roles = ["roles/artifactregistry.writer"] }
-    "pivot-pilotage-core"     = { account_id = "dep-pivot-pilotage-core", project_roles = ["roles/artifactregistry.writer"] }
     # Orchestrator: deploys revisions to Cloud Run. serviceAccountUser on each
     # runtime SA is bound below (per-SA, not project-wide).
     "pivot-infra" = { account_id = "dep-orchestrator", project_roles = ["roles/run.admin", "roles/artifactregistry.writer"] }
@@ -115,7 +114,7 @@ module "secrets" {
 
   # No redis-auth secret: the self-hosted Redis VM is VPC-internal, no AUTH.
   secrets = {
-    "postgres-password" = { accessors = [for k in ["pivot-core", "pivot-collaboratif", "pivot-agilite", "pivot-pilotage"] : "serviceAccount:${google_service_account.runtime[k].email}"] }
+    "postgres-password" = { accessors = [for k in ["pivot-core", "pivot-collaboratif", "pivot-agilite"] : "serviceAccount:${google_service_account.runtime[k].email}"] }
     "mail-password"     = { accessors = ["serviceAccount:${google_service_account.runtime["pivot-core"].email}"] }
     "otp-secret"        = { accessors = ["serviceAccount:${google_service_account.runtime["pivot-core"].email}"] }
   }
@@ -309,46 +308,6 @@ module "run_agilite" {
   depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
 }
 
-module "run_pilotage" {
-  source = "../../modules/cloud-run-service"
-
-  project_id            = var.project_id
-  region                = var.region
-  name                  = "pivot-pilotage-core"
-  image                 = var.pivot_pilotage_image
-  ingress               = "INGRESS_TRAFFIC_ALL"
-  service_account_email = google_service_account.runtime["pivot-pilotage"].email
-  network_id            = module.network.network_id
-  subnetwork_id         = module.network.subnet_id
-
-  container_port      = 8081
-  probe_port          = 8081
-  startup_probe_path  = "/api/pilotage/actuator/health/readiness"
-  liveness_probe_path = "/api/pilotage/actuator/health/liveness"
-  min_instances       = 0
-  max_instances       = 1
-  timeout_seconds     = 3600
-  session_affinity    = true
-  invokers            = ["allUsers"]
-
-  env = merge(local.redis_env, {
-    SPRING_PROFILES_ACTIVE       = "prod"
-    MANAGEMENT_SERVER_PORT       = "8081"
-    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
-    SPRING_DATASOURCE_USERNAME   = "pivot"
-    SPRING_FLYWAY_SCHEMAS        = "pilotage"
-    PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
-    PIVOT_APP_URL                = "https://${local.edge_host}"
-    CORS_ALLOWED_ORIGINS         = "https://${local.edge_host}"
-  })
-
-  secret_env = [
-    { name = "SPRING_DATASOURCE_PASSWORD", secret = "postgres-password" },
-  ]
-
-  depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
-}
-
 # --- Edge: pivot-ui nginx (SPA + reverse proxy) — the ONLY public entry point -
 # No VPC egress (network_id omitted): it only calls the other run.app URLs.
 # nginx.cloudrun.conf.template reads PIVOT_*_UPSTREAM (host only, no scheme) and
@@ -375,7 +334,6 @@ module "run_edge" {
     PIVOT_CORE_UPSTREAM         = module.run_core.uri_host
     PIVOT_COLLABORATIF_UPSTREAM = module.run_collaboratif.uri_host
     PIVOT_AGILITE_UPSTREAM      = module.run_agilite.uri_host
-    PIVOT_PILOTAGE_UPSTREAM     = module.run_pilotage.uri_host
   }
 }
 
