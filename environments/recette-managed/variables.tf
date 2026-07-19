@@ -47,17 +47,8 @@ variable "pivot_core_image" {
   description = "pivot-core image, ideally by @sha256 digest. Placeholder until Phase 1 pushes to Artifact Registry."
 }
 
-variable "pivot_collaboratif_image" {
-  type        = string
-  default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-collaboratif-core:PLACEHOLDER"
-  description = "pivot-collaboratif-core image, ideally by @sha256 digest."
-}
-
-variable "pivot_agilite_image" {
-  type        = string
-  default     = "europe-west1-docker.pkg.dev/pivot-project-501905/pivot/pivot-agilite-core:PLACEHOLDER"
-  description = "pivot-agilite-core image, ideally by @sha256 digest."
-}
+# EN53 (ADR-030) — variables pivot_collaboratif_image / pivot_agilite_image retirées :
+# agilité et collaboratif sont des modules internes de l'image pivot-core (modulith).
 
 variable "pivot_ui_image" {
   type        = string
