@@ -27,9 +27,12 @@ provider "google" {
 # managed-min — ultra-cheap Cloud Run stack, NO Load Balancer.
 #
 # FinOps posture (see pivot-docs plan "Déploiement automatique FinOps"):
-#   - 5 Cloud Run services, all scale-to-zero, served DIRECTLY on their public
+#   - 2 Cloud Run services, all scale-to-zero, served DIRECTLY on their public
 #     *.run.app URLs (ingress = ALL). The pivot-ui edge (nginx) is the single
-#     public entry point and reverse-proxies /api/* to the backend run.app URLs.
+#     public entry point and reverse-proxies /api/* to the pivot-core run.app
+#     URL — pivot-core is the modulith fat-jar serving both /api/agilite/** and
+#     /api/collaboratif/** (agilite and collaboratif no longer have their own
+#     Cloud Run services; EN53.5 collapsed them into the modulith).
 #   - No HTTPS Load Balancer (~$18/mo saved), no SPA bucket/CDN, no Cloud DNS.
 #   - No Memorystore, no ActiveMQ broker: collaboratif uses its in-memory
 #     SimpleBroker (the additive ActiveMQ relay stays disabled). Redis IS needed
@@ -44,8 +47,10 @@ provider "google" {
 # --- Runtime service accounts (one identity per Cloud Run service) -----------
 # Least privilege. All are granted Artifact Registry reader (image pull) by the
 # artifact-registry module below; the data-tier accessors are scoped per secret.
+# Only pivot-core (modulith: agilite+collaboratif) and pivot-ui (edge) remain —
+# EN53.5 collapsed the standalone agilite/collaboratif runtime identities.
 resource "google_service_account" "runtime" {
-  for_each = toset(["pivot-core", "pivot-collaboratif", "pivot-agilite", "pivot-ui"])
+  for_each = toset(["pivot-core", "pivot-ui"])
 
   project      = var.project_id
   account_id   = "sa-${each.value}"
@@ -113,8 +118,10 @@ module "secrets" {
   region     = var.region
 
   # No redis-auth secret: the self-hosted Redis VM is VPC-internal, no AUTH.
+  # pivot-core is the only Cloud SQL accessor now (modulith owns both the
+  # agilite and collaboratif schemas — EN53.5).
   secrets = {
-    "postgres-password" = { accessors = [for k in ["pivot-core", "pivot-collaboratif", "pivot-agilite"] : "serviceAccount:${google_service_account.runtime[k].email}"] }
+    "postgres-password" = { accessors = ["serviceAccount:${google_service_account.runtime["pivot-core"].email}"] }
     "mail-password"     = { accessors = ["serviceAccount:${google_service_account.runtime["pivot-core"].email}"] }
     "otp-secret"        = { accessors = ["serviceAccount:${google_service_account.runtime["pivot-core"].email}"] }
   }
@@ -224,94 +231,13 @@ module "run_core" {
   depends_on = [module.secrets, module.cloud_sql, module.redis_vm]
 }
 
-module "run_collaboratif" {
-  source = "../../modules/cloud-run-service"
-
-  project_id            = var.project_id
-  region                = var.region
-  name                  = "pivot-collaboratif-core"
-  image                 = var.pivot_collaboratif_image
-  ingress               = "INGRESS_TRAFFIC_ALL"
-  service_account_email = google_service_account.runtime["pivot-collaboratif"].email
-  network_id            = module.network.network_id
-  subnetwork_id         = module.network.subnet_id
-
-  container_port      = 8083
-  probe_port          = 8083
-  startup_probe_path  = "/api/collaboratif/actuator/health/readiness"
-  liveness_probe_path = "/api/collaboratif/actuator/health/liveness"
-
-  # In-memory SimpleBroker requires a single instance: max=1. Sticky + long
-  # timeout for the whiteboard WebSocket.
-  min_instances    = 0
-  max_instances    = 1
-  timeout_seconds  = 3600
-  session_affinity = true
-  invokers         = ["allUsers"]
-
-  env = merge(local.redis_env, {
-    SPRING_PROFILES_ACTIVE       = "prod"
-    MANAGEMENT_SERVER_PORT       = "8083"
-    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
-    SPRING_DATASOURCE_USERNAME   = "pivot"
-    SPRING_FLYWAY_SCHEMAS        = "collaboratif"
-    PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
-    # ActiveMQ relay stays OFF (in-memory broker only) — no PIVOT_ACTIVEMQ_RELAY_*.
-    PIVOT_APP_URL        = "https://${local.edge_host}"
-    CORS_ALLOWED_ORIGINS = "https://${local.edge_host}"
-  })
-
-  secret_env = [
-    { name = "SPRING_DATASOURCE_PASSWORD", secret = "postgres-password" },
-  ]
-
-  depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
-}
-
-module "run_agilite" {
-  source = "../../modules/cloud-run-service"
-
-  project_id            = var.project_id
-  region                = var.region
-  name                  = "pivot-agilite-core"
-  image                 = var.pivot_agilite_image
-  ingress               = "INGRESS_TRAFFIC_ALL"
-  service_account_email = google_service_account.runtime["pivot-agilite"].email
-  network_id            = module.network.network_id
-  subnetwork_id         = module.network.subnet_id
-
-  container_port      = 8082
-  probe_port          = 8082
-  startup_probe_path  = "/api/agilite/actuator/health/readiness"
-  liveness_probe_path = "/api/agilite/actuator/health/liveness"
-  min_instances       = 0
-  max_instances       = 1
-  timeout_seconds     = 3600
-  session_affinity    = true
-  invokers            = ["allUsers"]
-
-  env = merge(local.redis_env, {
-    SPRING_PROFILES_ACTIVE       = "prod"
-    MANAGEMENT_SERVER_PORT       = "8082"
-    SPRING_DATASOURCE_URL        = "jdbc:postgresql://${module.cloud_sql.private_ip}:5432/pivot?sslmode=require"
-    SPRING_DATASOURCE_USERNAME   = "pivot"
-    SPRING_FLYWAY_SCHEMAS        = "agilite"
-    PIVOT_ACTIVEMQ_RELAY_ENABLED = "false"
-    PIVOT_APP_URL                = "https://${local.edge_host}"
-    CORS_ALLOWED_ORIGINS         = "https://${local.edge_host}"
-  })
-
-  secret_env = [
-    { name = "SPRING_DATASOURCE_PASSWORD", secret = "postgres-password" },
-  ]
-
-  depends_on = [module.secrets, module.cloud_sql, module.redis_vm, module.run_core]
-}
-
 # --- Edge: pivot-ui nginx (SPA + reverse proxy) — the ONLY public entry point -
 # No VPC egress (network_id omitted): it only calls the other run.app URLs.
-# nginx.cloudrun.conf.template reads PIVOT_*_UPSTREAM (host only, no scheme) and
-# proxies HTTPS with SNI + Host rewrite. listen $PORT=8080, /health returns 200.
+# nginx.cloudrun.conf.template reads PIVOT_CORE_UPSTREAM (host only, no scheme)
+# and proxies HTTPS with SNI + Host rewrite for /api/agilite/** and
+# /api/collaboratif/** alike — both are served by the pivot-core modulith
+# (EN53.5 collapsed the standalone agilite/collaboratif Cloud Run services).
+# listen $PORT=8080, /health returns 200.
 module "run_edge" {
   source = "../../modules/cloud-run-service"
 
@@ -331,9 +257,7 @@ module "run_edge" {
   invokers            = ["allUsers"]
 
   env = {
-    PIVOT_CORE_UPSTREAM         = module.run_core.uri_host
-    PIVOT_COLLABORATIF_UPSTREAM = module.run_collaboratif.uri_host
-    PIVOT_AGILITE_UPSTREAM      = module.run_agilite.uri_host
+    PIVOT_CORE_UPSTREAM = module.run_core.uri_host
   }
 }
 
