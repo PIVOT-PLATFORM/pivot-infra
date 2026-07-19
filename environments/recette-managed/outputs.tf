@@ -49,10 +49,8 @@ output "edge_url" {
 
 output "service_urls" {
   value = {
-    "pivot-ui"                = module.run_edge.uri
-    "pivot-core"              = module.run_core.uri
-    "pivot-collaboratif-core" = module.run_collaboratif.uri
-    "pivot-agilite-core"      = module.run_agilite.uri
+    "pivot-ui"   = module.run_edge.uri
+    "pivot-core" = module.run_core.uri
   }
-  description = "All Cloud Run service URLs. Backends are reached by the edge; set vars.RECETTE_BASE_URL (orchestrator) to edge_url."
+  description = "All Cloud Run service URLs (pivot-core is the modulith serving /api/agilite and /api/collaboratif — EN53.5). Backends are reached by the edge; set vars.RECETTE_BASE_URL (orchestrator) to edge_url."
 }

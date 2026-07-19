@@ -68,8 +68,8 @@ resource "google_sql_database_instance" "this" {
   }
 }
 
-# The single application database. 4 schemas inside are owned/migrated by the
-# services' Flyway, not declared here.
+# The single application database. 3 schemas inside (public/agilite/
+# collaboratif) are owned/migrated by the services' Flyway, not declared here.
 resource "google_sql_database" "pivot" {
   project  = var.project_id
   name     = var.database_name
