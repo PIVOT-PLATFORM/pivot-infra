@@ -3,11 +3,16 @@ name: Deploy orchestrator
 # Central deploy authority for the managed-min Cloud Run stack (single env, no LB).
 # Each service repo builds + pushes an immutable digest to Artifact Registry
 # (keyless WIF) then fires a repository_dispatch here with {service, image,
-# digest, version}. This workflow owns the Cloud Run rollout: it updates the
-# EXISTING service (created/configured by Terraform in environments/recette-managed
-# — env, secrets, VPC, probes, scaling) to the released digest, then smoke-tests
-# through the public edge. First-ever creation of each service is done by
-# `terraform apply` (with the AR image); this only swaps the image afterwards.
+# digest, version}. This workflow owns the Cloud Run rollout of the EXISTING
+# service (created/configured by Terraform in environments/recette-managed — env,
+# secrets, VPC, probes, scaling). Rollout is deploy-idle → smoke → promote: the
+# released digest is deployed as a tagged, no-traffic revision, its OWN URL is
+# smoke-tested for readiness, and only then is 100% traffic moved onto it. A
+# revision that fails to boot therefore never receives traffic (the current good
+# revision keeps serving), and every healthy deploy explicitly advances traffic —
+# so the rollout is continuous instead of leaving traffic pinned to whatever
+# revision a past failed `update --image` rolled back to. First-ever creation of
+# each service is done by `terraform apply`; this only swaps the image afterwards.
 #
 # Auth is keyless (Workload Identity Federation): no SA keys.
 # Repo/org VARIABLES (not secrets):
@@ -70,7 +75,15 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Deploy revision by digest
+      # Deploy the new digest as an IDLE, tagged revision (no traffic). Serving
+      # traffic stays on the current good revision until we have proven the new
+      # one boots — so a bad revision never takes the site down, and (unlike a
+      # plain `update --image`, which leaves traffic pinned to whatever specific
+      # revision a past failed deploy rolled back to) the promote step below
+      # explicitly moves traffic forward every time. This is what makes the
+      # rollout actually continuous instead of silently stranding new revisions.
+      - name: Deploy revision by digest (idle, tagged candidate)
+        id: deploy
         run: |
           # Cloud Run revision names are "<service>-<suffix>" and must fit the
           # Kubernetes 63-char RFC1123 label limit. VERSION can be a full 40-char
@@ -85,9 +98,47 @@ jobs:
             --region="${{ vars.GCP_REGION }}" \
             --image="${IMAGE}@${DIGEST}" \
             --revision-suffix="${SUFFIX}" \
+            --no-traffic --tag=candidate \
+            --quiet
+          REVISION="${SERVICE}-${SUFFIX}"
+          echo "revision=${REVISION}" >> "$GITHUB_OUTPUT"
+          # The tagged revision gets its own stable URL — probe THAT (the new
+          # revision itself), not the public edge (which still serves the old one).
+          CAND_URL=$(gcloud run services describe "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --format=json \
+            | jq -r '.status.traffic[] | select(.tag == "candidate") | .url')
+          if [ -z "${CAND_URL}" ] || [ "${CAND_URL}" = "null" ]; then
+            echo "::error::could not resolve the candidate tag URL"; exit 1
+          fi
+          echo "cand_url=${CAND_URL}" >> "$GITHUB_OUTPUT"
+          echo "Candidate revision ${REVISION} deployed idle at ${CAND_URL}"
+
+      - name: Smoke test the candidate revision (readiness)
+        run: |
+          URL="${{ steps.deploy.outputs.cand_url }}"
+          for i in $(seq 1 15); do
+            if curl -fsS "${URL}/api/actuator/health/readiness"; then
+              echo "candidate healthy"; exit 0
+            fi
+            echo "attempt $i not ready yet"; sleep 6
+          done
+          echo "::error::candidate readiness never went green — traffic left on the current revision"
+          exit 1
+
+      # Only reached if the candidate is healthy: move 100% of traffic to it and
+      # drop the temporary tag. Traffic is pinned to this exact (tested) revision.
+      - name: Promote candidate to 100% traffic
+        run: |
+          gcloud run services update-traffic "${SERVICE}" \
+            --project="${{ vars.GCP_PROJECT }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --to-revisions="${{ steps.deploy.outputs.revision }}=100" \
+            --remove-tags=candidate \
             --quiet
 
-      - name: Smoke test (readiness via the edge)
+      - name: Smoke test via the edge (post-promotion)
         if: vars.RECETTE_BASE_URL != ''
         run: |
           for i in $(seq 1 10); do
@@ -96,4 +147,4 @@ jobs:
             fi
             echo "attempt $i not ready yet"; sleep 6
           done
-          echo "::error::readiness never went green"; exit 1
+          echo "::error::edge readiness never went green after promotion"; exit 1
